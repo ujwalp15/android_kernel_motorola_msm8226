@@ -335,8 +335,16 @@ include $(srctree)/scripts/Kbuild.include
 
 AS		= $(CROSS_COMPILE)as
 LD		= $(CROSS_COMPILE)ld
-REAL_CC		= $(CROSS_COMPILE)gcc
+ifneq ($(strip $(USE_KERNEL_OPTIMIZATIONS)),true)
 CPP		= $(CC) -E
+endif
+ifneq ($(strip $(USE_KERNEL_OPTIMIZATIONS)),true)
+  ifneq ($(strip $(USE_OPTIMIZATIONS)),true)
+    REAL_CC         = $(CROSS_COMPILE)gcc
+  else
+    CC		    = $(CROSS_COMPILE)gcc
+  endif
+endif
 AR		= $(CROSS_COMPILE)ar
 NM		= $(CROSS_COMPILE)nm
 STRIP		= $(CROSS_COMPILE)strip
@@ -350,18 +358,122 @@ KALLSYMS	= scripts/kallsyms
 PERL		= perl
 CHECK		= sparse
 
+ifneq ($(strip $(USE_OPTIMIZATIONS)),true)
 # Use the wrapper for the compiler.  This wrapper scans for new
 # warnings and causes the build to stop upon encountering them.
 CC		= $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)
+endif
 
 CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 		  -Wbitwise -Wno-return-void $(CF)
 CFLAGS_MODULE   =
 AFLAGS_MODULE   =
+ifeq ($(strip $(USE_KERNEL_OPTIMIZATIONS)),true)
+LDFLAGS_MODULE  = -T $(srctree)/scripts/module-common.lds
+else
 LDFLAGS_MODULE  =
+endif
 CFLAGS_KERNEL	=
 AFLAGS_KERNEL	=
 CFLAGS_GCOV	= -fprofile-arcs -ftest-coverage
+
+ifeq ($(strip $(USE_KERNEL_OPTIMIZATIONS)),true)
+# begin The SaberMod Project additions
+
+# Copyright (C) 2015 The SaberMod Project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, oftware
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or mplied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# Handle kernel CC flags by importing vendor/sm strings
+ifdef SM_KERNEL_NAME
+  USE_GCC = $(CROSS_COMPILE_NAME)gcc-$(SM_KERNEL_NAME)
+  CC = $(USE_GCC)
+else
+  CC = $(CROSS_COMPILE)gcc
+endif
+
+CPP = $(CC) -E
+
+# Highest level of basic gcc optimizations if enabled
+ifeq ($(strip $(LOCAL_O3)),true)
+  SABERMOD_KERNEL_FLAGS	:= -O3
+else
+  SABERMOD_KERNEL_FLAGS := -O2
+endif
+
+# Extra flags
+ifdef SABERMOD_KERNEL_FLAGS
+  ifdef EXTRA_SABERMOD_GCC_VECTORIZE
+    SABERMOD_KERNEL_FLAGS += $(EXTRA_SABERMOD_GCC_VECTORIZE)
+  endif
+  ifdef EXTRA_SABERMOD_GCC
+    SABERMOD_KERNEL_FLAGS += $(EXTRA_SABERMOD_GCC)
+  endif
+else
+  ifdef EXTRA_SABERMOD_GCC_VECTORIZE
+    SABERMOD_KERNEL_FLAGS := $(EXTRA_SABERMOD_GCC_VECTORIZE)
+  endif
+  ifdef EXTRA_SABERMOD_GCC
+    SABERMOD_KERNEL_FLAGS := $(EXTRA_SABERMOD_GCC)
+  endif
+endif
+
+ifdef SABERMOD_KERNEL_FLAGS
+  ifdef kernel_arch_variant_cflags
+    SABERMOD_KERNEL_FLAGS += $(kernel_arch_variant_cflags)
+  endif
+else
+  ifdef kernel_arch_variant_cflags
+    SABERMOD_KERNEL_FLAGS := $(kernel_arch_variant_cflags)
+  endif
+endif
+
+# Strict aliasing for hammerhead if enabled
+ifdef CONFIG_MACH_MSM8974_HAMMERHEAD_STRICT_ALIASING
+  ifdef SABERMOD_KERNEL_FLAGS
+    SABERMOD_KERNEL_FLAGS += $(KERNEL_STRICT_FLAGS)
+  else
+    SABERMOD_KERNEL_FLAGS := $(KERNEL_STRICT_FLAGS)
+  endif
+endif
+
+ifneq (1,$(words $(DISABLE_SANITIZE_LEAK)))
+
+  # Memory leak detector sanitizer
+  ifdef SABERMOD_KERNEL_FLAGS
+    SABERMOD_KERNEL_FLAGS += -fsanitize=leak
+  else
+    SABERMOD_KERNEL_FLAGS := -fsanitize=leak
+  endif
+endif
+
+ifdef SABERMOD_KERNEL_FLAGS
+  ifdef GRAPHITE_KERNEL_FLAGS
+    SABERMOD_KERNEL_FLAGS += $(GRAPHITE_KERNEL_FLAGS)
+  endif
+else
+  ifdef GRAPHITE_KERNEL_FLAGS
+    SABERMOD_KERNEL_FLAGS := $(GRAPHITE_KERNEL_FLAGS) -marm
+  endif
+endif
+
+# Add everything to CC at the end
+ifdef SABERMOD_KERNEL_FLAGS
+  CC += $(SABERMOD_KERNEL_FLAGS)
+endif
+# end The SaberMod Project additions
+endif
 
 
 # Use LINUXINCLUDE when you must reference the include/ directory.
@@ -374,10 +486,15 @@ LINUXINCLUDE    := -I$(srctree)/arch/$(hdr-arch)/include \
 KBUILD_CPPFLAGS := -D__KERNEL__
 
 KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
-		   -fno-strict-aliasing -fno-common \
+		   -fno-common \
 		   -Werror-implicit-function-declaration \
 		   -Wno-format-security -Wno-sizeof-pointer-memaccess \
 		   -fno-delete-null-pointer-checks
+#If strict alialasing would be turned on, do not add it ot KBUILD_CFLAGS
+ifndef CONFIG_MACH_MSM8974_HAMMERHEAD_STRICT_ALIASING
+KBUILD_CFLAGS	+= -fno-strict-aliasing
+endif
+
 KBUILD_AFLAGS_KERNEL :=
 KBUILD_CFLAGS_KERNEL :=
 KBUILD_AFLAGS   := -D__ASSEMBLY__
@@ -567,11 +684,34 @@ endif # $(dot-config)
 # Defaults to vmlinux, but the arch makefile usually adds further targets
 all: vmlinux
 
-ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
-KBUILD_CFLAGS	+= -Os $(call cc-disable-warning,maybe-uninitialized,)
-else
-KBUILD_CFLAGS	+= -O2
-endif
+# begin The SaberMod Project additions
+
+# Copyright (C) 2015 The SaberMod Project
+
+#
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# Handle kernel CC flags by importing vendor/sm strings
+#ifneq ($(strip $(LOCAL_O3)),true)
+  ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
+    KBUILD_CFLAGS += -Os $(call cc-disable-warning,maybe-uninitialized,)
+  else
+    KBUILD_CFLAGS += -O2
+  endif
+#endif
+# end The SaberMod Project additions
 
 include $(srctree)/arch/$(SRCARCH)/Makefile
 
@@ -990,9 +1130,13 @@ prepare1: prepare2 include/linux/version.h include/generated/utsrelease.h \
 	$(cmd_crmodverdir)
 
 archprepare: archheaders archscripts prepare1 scripts_basic
-
+ifeq ($(strip $(USE_KERNEL_OPTIMIZATIONS)),true)
+prepare0: archprepare FORCE
+	$(Q)$(MAKE) $(build)=. missing-syscalls
+else
 prepare0: archprepare FORCE
 	$(Q)$(MAKE) $(build)=.
+endif
 
 # All the preparing..
 prepare: prepare0

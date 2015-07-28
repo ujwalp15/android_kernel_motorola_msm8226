@@ -28,8 +28,9 @@ FONTC	= $(srctree)/drivers/video/console/font_acorn_8x8.c
 
 # string library code (-Os is enforced to keep it much smaller)
 OBJS		+= string.o
+ifneq ($(strip $(USE_KERNEL_OPTIMIZATIONS)),true)
 CFLAGS_string.o	:= -Os
-
+endif
 #
 # Architecture dependencies
 #
